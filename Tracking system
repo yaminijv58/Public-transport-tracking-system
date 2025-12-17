@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Chennai Realtime Transport Tracker</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+  <style>
+    :root {
+      --navy: #0b2742;
+      --accent: #1070ff;
+      --muted: #9aa7b7;
+      --orange: #ff6600;
+    }
+    html, body { height: 100%; margin: 0; font-family: Inter, Arial, sans-serif; }
+    body { display: grid; grid-template-columns: 320px 1fr; background: #f3f6fa; }
+    body.dark { background: #0b2742; color: #eee; }
+
+    .sidebar { background: var(--navy); color: #fff; padding: 20px; display: flex; flex-direction: column; overflow: hidden; }
+    .sidebar h2 { margin: 0 0 14px; font-size: 22px; font-weight: 700; }
+    .bus-list, .stop-list { flex: 1; overflow-y: auto; margin-bottom: 15px; }
+
+    .item { background: rgba(255, 255, 255, 0.08); border-radius: 10px; padding: 10px; margin-bottom: 10px; cursor: pointer; }
+    .item:hover { background: rgba(255, 255, 255, 0.18); }
+    .item h3 { margin: 0; font-size: 15px; }
+    .item p { margin: 4px 0 0; font-size: 13px; color: var(--muted); }
+    body.dark .item { background: rgba(255 255 255 / 0.15); }
+    body.dark .item:hover { background: rgba(255 255 255 / 0.3); }
+
+    #map { height: 100vh; width: 100%; }
+
+    #darkModeToggle { background: var(--accent); color: white; border: none; border-radius: 8px; padding: 8px 12px; font-weight: 600; cursor: pointer; margin-bottom: 20px; }
+    #darkModeToggle:hover { background: #0a58d8; }
+
+    /* QR Modal */
+    #qrModal { position: fixed; inset: 0; background: rgba(0,0,0,0.6); display: none; align-items: center; justify-content: center; z-index: 9999; }
+    #qrModalContent { background: white; padding: 20px; border-radius: 10px; text-align: center; max-width: 260px; box-shadow: 0 5px 15px rgba(0,0,0,0.3); }
+    #qrModalClose { cursor: pointer; font-weight: bold; color: #555; margin-bottom: 10px; display: inline-block; font-size: 18px; }
+    body.dark #qrModalContent { background: #0b2742; color: #eee; }
+
+    .ticket-btn { background: var(--orange); color: white; border: none; border-radius: 6px; padding: 4px 10px; font-size: 12px; cursor: pointer; margin-left: 8px; }
+    .ticket-btn:hover { background: #e65500; }
+
+    /* Search box */
+    .search-box { background: rgba(255,255,255,0.15); padding: 10px; border-radius: 10px; margin-bottom: 15px; }
+    .search-box label { font-size: 13px; display: block; margin-top: 6px; }
+    .search-box select { width: 100%; padding: 6px; border-radius: 6px; margin-top: 3px; border: none; }
+    .search-box button { margin-top: 10px; width: 100%; background: var(--accent); color: #fff; border: none; padding: 8px; border-radius: 6px; cursor: pointer; }
+    .search-box button:hover { background: #0a58d8; }
+  </style>
+</head>
+<body>
+  <div class="sidebar">
+    <button id="darkModeToggle">Toggle Dark Mode</button>
+    <div class="search-box">
+      <label for="sourceSelect">Source</label>
+      <select id="sourceSelect"></select>
+      <label for="destSelect">Destination</label>
+      <select id="destSelect"></select>
+      <button id="routeBtn">Find Route</button>
+      <p id="routeInfo"></p>
+    </div>
+    <h2>Chennai Fleet</h2>
+    <div id="busList" class="bus-list"></div>
+    <h2>Nearby Stops</h2>
+    <div id="stopList" class="stop-list"></div>
+  </div>
+  <div id="map"></div>
+
+  <!-- QR Modal -->
+  <div id="qrModal">
+    <div id="qrModalContent">
+      <div id="qrModalClose">✖ Close</div>
+      <h3 id="qrModalTitle"></h3>
+      <canvas id="qrModalCanvas"></canvas>
+    </div>
+  </div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.1/build/qrcode.min.js"></script>
+  <script>
+    // === Chennai Routes ===
+    const routes = [
+      {
+        id: "Route-1",
+        coords: [[13.0827, 80.2707],[13.0850, 80.2780],[13.0900, 80.2850],[13.0950, 80.2900]],
+        stops: [
+          { name: "Chennai Central", lat: 13.0827, lng: 80.2707, cost: 10 },
+          { name: "Egmore", lat: 13.0850, lng: 80.2780, cost: 15 },
+          { name: "Kilpauk", lat: 13.0900, lng: 80.2850, cost: 20 },
+          { name: "Anna Nagar", lat: 13.0950, lng: 80.2900, cost: 25 }
+        ]
+      },
+      {
+        id: "Route-2",
+        coords: [[13.0500, 80.2500],[13.0600, 80.2600],[13.0700, 80.2650],[13.0800, 80.2700]],
+        stops: [
+          { name: "Guindy", lat: 13.0500, lng: 80.2500, cost: 12 },
+          { name: "Saidapet", lat: 13.0600, lng: 80.2600, cost: 18 },
+          { name: "T.Nagar", lat: 13.0700, lng: 80.2650, cost: 24 },
+          { name: "Nungambakkam", lat: 13.0800, lng: 80.2700, cost: 30 }
+        ]
+      }
+    ];
+
+    // === Fleet buses ===
+    const buses = [
+      { id: "Bus-101", route: 0, idx: 0, t: 0, speed: 25, seats: 40, marker: null },
+      { id: "Bus-202", route: 1, idx: 0, t: 0, speed: 22, seats: 35, marker: null }
+    ];
+
+    // === Init Map ===
+    const map = L.map('map').setView([13.0827, 80.2707], 13);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19}).addTo(map);
+
+    // === Draw routes + stops ===
+    routes.forEach(r=>{
+      L.polyline(r.coords,{color:"#1070ff",weight:5,opacity:0.6}).addTo(map);
+      r.stops.forEach(s=>{
+        L.circleMarker([s.lat,s.lng],{radius:6,color:"#ff6600",fillColor:"#ff6600",fillOpacity:0.8})
+          .addTo(map)
+          .bindPopup(`<h3>${s.name}</h3><p>Fare: ₹${s.cost}</p>`);
+      });
+    });
+
+    // === Bus icon ===
+    function busIcon(color="#FF5A4D"){
+      return L.icon({
+        iconUrl:'data:image/svg+xml,'+encodeURIComponent(`
+          <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24">
+            <path fill="${color}" d="M6 2h12a2 2 0 0 1 2 2v11a3 3 0 0 1 -3 3v1h-2v-1h-6v1h-2v-1a3 3 0 0 1-3-3V4a2 2 0 0 1 2-2z"/>
+            <circle cx="8.5" cy="16.5" r="1.2" fill="#fff"/>
+            <circle cx="15.5" cy="16.5" r="1.2" fill="#fff"/>
+          </svg>`),
+        iconSize:[32,32],iconAnchor:[16,32]
+      });
+    }
+
+    // === Distance / ETA ===
+    function haversine(lat1,lon1,lat2,lon2){
+      const R=6371;
+      const dLat=(lat2-lat1)*Math.PI/180;
+      const dLon=(lon2-lon1)*Math.PI/180;
+      const a=Math.sin(dLat/2)**2+Math.cos(lat1*Math.PI/180)*Math.cos(lat2*Math.PI/180)*Math.sin(dLon/2)**2;
+      return R*2*Math.atan2(Math.sqrt(a),Math.sqrt(1-a));
+    }
+    function calcETA(bus){
+      const route=routes[bus.route].coords;
+      let dist=0;
+      for(let i=bus.idx;i<route.length-1;i++){
+        dist+=haversine(route[i][0],route[i][1],route[i+1][0],route[i+1][1]);
+      }
+      return Math.round((dist/bus.speed)*60);
+    }
+
+    // === Add buses ===
+    buses.forEach(bus=>{
+      const start=routes[bus.route].coords[0];
+      bus.marker=L.marker(start,{icon:busIcon()})
+        .addTo(map)
+        .bindPopup(`<h3>${bus.id}</h3><p>Speed: ${bus.speed} km/h</p>`);
+    });
+
+    const busList=document.getElementById("busList");
+    const stopList=document.getElementById("stopList");
+
+    // === QR Modal ===
+    const qrModal=document.getElementById("qrModal");
+    const qrModalClose=document.getElementById("qrModalClose");
+    const qrModalTitle=document.getElementById("qrModalTitle");
+    const qrModalCanvas=document.getElementById("qrModalCanvas");
+
+    function showQRModal(title,data){
+      qrModalTitle.textContent=title;
+      QRCode.toCanvas(qrModalCanvas,data,{width:200});
+      qrModal.style.display="flex";
+    }
+    qrModalClose.onclick=()=>{ qrModal.style.display="none"; qrModalCanvas.getContext('2d').clearRect(0,0,qrModalCanvas.width,qrModalCanvas.height); };
+    qrModal.onclick=e=>{ if(e.target===qrModal) qrModalClose.onclick(); };
+
+    // === Refresh sidebar ===
+    function refreshSidebar(){
+      busList.innerHTML="";
+      buses.forEach(bus=>{
+        const eta=calcETA(bus);
+        const div=document.createElement("div");
+        div.className="item";
+        div.innerHTML=`<h3>${bus.id}</h3>
+          <p>Speed: ${bus.speed} km/h | ETA: ${eta} min | Seats: ${bus.seats}</p>`;
+        div.onclick=()=>{ const loc=routes[bus.route].coords[bus.idx]; map.setView(loc,16); bus.marker.openPopup(); };
+        busList.appendChild(div);
+      });
+
+      stopList.innerHTML="";
+      routes.forEach(r=>{
+        r.stops.forEach(s=>{
+          const div=document.createElement("div");
+          div.className="item";
+          div.innerHTML=`
+            <h3>${s.name}</h3>
+            <p>Fare: ₹${s.cost}
+            <button class="ticket-btn">Buy Ticket</button></p>`;
+          div.onclick=(e)=>{ if(!e.target.classList.contains("ticket-btn")) map.setView([s.lat,s.lng],16); };
+          div.querySelector(".ticket-btn").onclick=(e)
