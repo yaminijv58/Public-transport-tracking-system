@@ -1,0 +1,162 @@
+/**
+ * Chennai Realtime Transport Tracker - Core Logic
+ */
+
+// === Data Structures ===
+const routes = [
+  {
+    id: "Route-1",
+    coords: [[13.0827, 80.2707], [13.0850, 80.2780], [13.0900, 80.2850], [13.0950, 80.2900]],
+    stops: [
+      { name: "Chennai Central", lat: 13.0827, lng: 80.2707, cost: 10 },
+      { name: "Egmore", lat: 13.0850, lng: 80.2780, cost: 15 },
+      { name: "Kilpauk", lat: 13.0900, lng: 80.2850, cost: 20 },
+      { name: "Anna Nagar", lat: 13.0950, lng: 80.2900, cost: 25 }
+    ]
+  },
+  {
+    id: "Route-2",
+    coords: [[13.0500, 80.2500], [13.0600, 80.2600], [13.0700, 80.2650], [13.0800, 80.2700]],
+    stops: [
+      { name: "Guindy", lat: 13.0500, lng: 80.2500, cost: 12 },
+      { name: "Saidapet", lat: 13.0600, lng: 80.2600, cost: 18 },
+      { name: "T.Nagar", lat: 13.0700, lng: 80.2650, cost: 24 },
+      { name: "Nungambakkam", lat: 13.0800, lng: 80.2700, cost: 30 }
+    ]
+  }
+];
+
+const buses = [
+  { id: "Bus-101", route: 0, idx: 0, t: 0, speed: 25, seats: 40, marker: null },
+  { id: "Bus-202", route: 1, idx: 0, t: 0, speed: 22, seats: 35, marker: null }
+];
+
+// === Initialize Map ===
+const map = L.map('map').setView([13.0827, 80.2707], 13);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  maxZoom: 19,
+  attribution: '© OpenStreetMap'
+}).addTo(map);
+
+// === Utility Functions ===
+
+function busIcon(color = "#FF5A4D") {
+  return L.icon({
+    iconUrl: 'data:image/svg+xml,' + encodeURIComponent(`
+      <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24">
+        <path fill="${color}" d="M6 2h12a2 2 0 0 1 2 2v11a3 3 0 0 1 -3 3v1h-2v-1h-6v1h-2v-1a3 3 0 0 1-3-3V4a2 2 0 0 1 2-2z"/>
+        <circle cx="8.5" cy="16.5" r="1.2" fill="#fff"/>
+        <circle cx="15.5" cy="16.5" r="1.2" fill="#fff"/>
+      </svg>`),
+    iconSize: [32, 32],
+    iconAnchor: [16, 32]
+  });
+}
+
+function haversine(lat1, lon1, lat2, lon2) {
+  const R = 6371; // Earth radius in km
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLon / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+function calcETA(bus) {
+  const routeCoords = routes[bus.route].coords;
+  let dist = 0;
+  for (let i = bus.idx; i < routeCoords.length - 1; i++) {
+    dist += haversine(routeCoords[i][0], routeCoords[i][1], routeCoords[i + 1][0], routeCoords[i + 1][1]);
+  }
+  return Math.round((dist / bus.speed) * 60);
+}
+
+// === Modal Logic ===
+const qrModal = document.getElementById("qrModal");
+const qrModalClose = document.getElementById("qrModalClose");
+const qrModalTitle = document.getElementById("qrModalTitle");
+const qrModalCanvas = document.getElementById("qrModalCanvas");
+
+function showQRModal(title, data) {
+  qrModalTitle.textContent = title;
+  QRCode.toCanvas(qrModalCanvas, data, { width: 200 });
+  qrModal.style.display = "flex";
+}
+
+qrModalClose.onclick = () => {
+  qrModal.style.display = "none";
+};
+
+window.onclick = (event) => {
+  if (event.target === qrModal) qrModal.style.display = "none";
+};
+
+// === UI Rendering ===
+const busList = document.getElementById("busList");
+const stopList = document.getElementById("stopList");
+
+function refreshSidebar() {
+  busList.innerHTML = "";
+  buses.forEach(bus => {
+    const eta = calcETA(bus);
+    const div = document.createElement("div");
+    div.className = "item";
+    div.innerHTML = `<h3>${bus.id}</h3>
+                     <p>Speed: ${bus.speed} km/h | ETA: ${eta} min | Seats: ${bus.seats}</p>`;
+    div.onclick = () => {
+      const loc = routes[bus.route].coords[bus.idx];
+      map.setView(loc, 16);
+      bus.marker.openPopup();
+    };
+    busList.appendChild(div);
+  });
+
+  stopList.innerHTML = "";
+  routes.forEach(r => {
+    r.stops.forEach(s => {
+      const div = document.createElement("div");
+      div.className = "item";
+      div.innerHTML = `<h3>${s.name}</h3>
+                       <p>Fare: ₹${s.cost} <button class="ticket-btn">Buy Ticket</button></p>`;
+      
+      div.querySelector(".ticket-btn").onclick = (e) => {
+        e.stopPropagation();
+        showQRModal(`Ticket to ${s.name}`, `FARE-RS-${s.cost}-${Date.now()}`);
+      };
+
+      div.onclick = (e) => {
+        if (!e.target.classList.contains("ticket-btn")) {
+          map.setView([s.lat, s.lng], 16);
+        }
+      };
+      stopList.appendChild(div);
+    });
+  });
+}
+
+// === Map Initialization & Interaction ===
+function initMarkers() {
+  routes.forEach(r => {
+    L.polyline(r.coords, { color: "#1070ff", weight: 5, opacity: 0.6 }).addTo(map);
+    r.stops.forEach(s => {
+      L.circleMarker([s.lat, s.lng], { radius: 6, color: "#ff6600", fillColor: "#ff6600", fillOpacity: 0.8 })
+        .addTo(map)
+        .bindPopup(`<h3>${s.name}</h3><p>Fare: ₹${s.cost}</p>`);
+    });
+  });
+
+  buses.forEach(bus => {
+    const startPos = routes[bus.route].coords[0];
+    bus.marker = L.marker(startPos, { icon: busIcon() })
+      .addTo(map)
+      .bindPopup(`<h3>${bus.id}</h3><p>Speed: ${bus.speed} km/h</p>`);
+  });
+}
+
+// === Event Listeners ===
+document.getElementById("darkModeToggle").onclick = () => {
+  document.body.classList.toggle("dark");
+};
+
+// Start application
+initMarkers();
+refreshSidebar();
